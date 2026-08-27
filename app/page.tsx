@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 
 type Data = {
   symbol: string; months: number; tradingDays: number; bars: number; lastPrice: number; lastDate: string;
@@ -8,87 +8,135 @@ type Data = {
   technical: { label: string; score: number; rsi14: number; macd: number; macdSignal: number; sma20: number; sma50: number; ema20: number };
   targetFromLast: number; reentryAfterTarget: number; error?: string;
 };
+type StockState = { symbol: string; data?: Data; loading: boolean; entry?: number | null; entryInput: string };
 
 const money = (n: number) => new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 const pct = (n: number) => `${n >= 0 ? '+' : ''}%${n.toFixed(2)}`;
-
-function StockCard({ symbol, months }: { symbol: string; months: number }) {
-  const [data, setData] = useState<Data | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [entryPrice, setEntryPrice] = useState<number | null>(null);
-  const [entryInput, setEntryInput] = useState('');
-
-  const load = async () => {
-    setLoading(true);
-    try {
-      const r = await fetch(`/api/backtest?symbol=${symbol}&months=${months}`, { cache: 'no-store' });
-      setData(await r.json());
-    } catch {
-      setData({ error: 'Veri alınamadı' } as Data);
-    }
-    setLoading(false);
-  };
-
-  useEffect(() => { load(); }, [symbol, months]);
-  useEffect(() => {
-    const saved = window.localStorage.getItem(`position-entry-${symbol}`);
-    const n = saved ? Number(saved) : NaN;
-    if (Number.isFinite(n) && n > 0) { setEntryPrice(n); setEntryInput(String(n)); }
-  }, [symbol]);
-
-  const saveEntry = (e: FormEvent) => {
-    e.preventDefault();
-    const n = Number(entryInput.replace(',', '.'));
-    if (!Number.isFinite(n) || n <= 0) return;
-    setEntryPrice(n);
-    window.localStorage.setItem(`position-entry-${symbol}`, String(n));
-  };
-
-  const clearEntry = () => {
-    setEntryPrice(null); setEntryInput('');
-    window.localStorage.removeItem(`position-entry-${symbol}`);
-  };
-
-  if (loading) return <section className="card loading"><div className="pulse" /><div className="pulse short" /></section>;
-  if (!data || data.error) return <section className="card"><h2>{symbol}</h2><p className="error">{data?.error || 'Veri alınamadı'}</p><button onClick={load}>Tekrar dene</button></section>;
-
-  const positionReturn = entryPrice ? (data.lastPrice / entryPrice - 1) * 100 : 0;
-  const positionTarget = entryPrice ? entryPrice * (1 + data.best.tp / 100) : 0;
-  const remaining = entryPrice ? (positionTarget / data.lastPrice - 1) * 100 : 0;
-  const progress = entryPrice ? Math.max(0, Math.min(100, (positionReturn / data.best.tp) * 100)) : 0;
-  const reached = entryPrice ? data.lastPrice >= positionTarget : false;
-
-  return <section className="card">
-    <div className="stockHead"><div><span className="ticker">{symbol}</span><span className="date">{data.lastDate} · {data.bars} seans</span></div><div className="price">₺{money(data.lastPrice)}</div></div>
-
-    <div className="positionBox">
-      <div className="positionTitle"><span>POZİSYONUM</span>{entryPrice && <button type="button" className="miniBtn" onClick={clearEntry}>Sıfırla</button>}</div>
-      {!entryPrice ? <form className="entryForm" onSubmit={saveEntry}>
-        <label htmlFor={`entry-${symbol}`}>Alış fiyatı</label>
-        <div><input id={`entry-${symbol}`} inputMode="decimal" placeholder="Örn. 400,00" value={entryInput} onChange={e => setEntryInput(e.target.value)} /><button type="submit">Kaydet</button></div>
-      </form> : <>
-        <div className="positionNumbers">
-          <div><span>Getiri</span><strong className={positionReturn >= 0 ? 'positive' : 'negative'}>{pct(positionReturn)}</strong></div>
-          <div><span>TP fiyatı</span><strong>₺{money(positionTarget)}</strong></div>
-          <div><span>{reached ? 'Durum' : 'TP’ye kalan'}</span><strong className={reached ? 'hit' : ''}>{reached ? 'HEDEFE ULAŞTI' : `%${Math.max(0, remaining).toFixed(2)}`}</strong></div>
-        </div>
-        <div className="progress"><i style={{ width: `${progress}%` }} /></div>
-        <small>Alış ₺{money(entryPrice)} · Backtest TP +%{data.best.tp.toFixed(2)}</small>
-      </>}
-    </div>
-
-    <div className="tech"><span>TEKNİK GÖRÜNÜM</span><strong>{data.technical.label}</strong><small>RSI {data.technical.rsi14.toFixed(1)} · MACD {data.technical.macd > data.technical.macdSignal ? 'pozitif' : 'negatif'}</small></div>
-    <div className="signal"><div><span>TP</span><strong>+%{data.best.tp.toFixed(2)}</strong></div><div><span>YENİDEN AL</span><strong>-%{data.best.reentry.toFixed(2)}</strong></div></div>
-    <div className="levels"><div><span>Bugünkü fiyattan hedef</span><b>₺{money(data.targetFromLast)}</b></div><div><span>Hedef satış sonrası alış</span><b>₺{money(data.reentryAfterTarget)}</b></div></div>
-    <div className="stats"><div><span>Tamamlanan swing</span><b>{data.best.cycles}</b></div><div><span>Backtest getirisi</span><b>%{data.best.returnPct.toFixed(1)}</b></div><div><span>Ort. hedef süresi</span><b>{data.best.avgDays.toFixed(1)} seans</b></div></div>
-    <button className="refresh" onClick={load}>↻ Güncelle</button>
-  </section>;
-}
+const DEFAULT_SYMBOLS = ['ASELS', 'THYAO'];
 
 export default function Home() {
   const [months, setMonths] = useState(3);
-  return <main><header><div><p className="eyebrow">BIST · SWING STRATEGY</p><h1>BackTest Stock</h1><p className="sub">Backtest oranı + pozisyon takibi + güncel teknik görünüm.</p></div><div className="period"><span>BACKTEST</span><select value={months} onChange={e => setMonths(Number(e.target.value))}><option value={1}>1 ay · ~21 seans</option><option value={2}>2 ay · ~42 seans</option><option value={3}>3 ay · ~63 seans</option><option value={6}>6 ay · ~126 seans</option></select></div></header>
-    <div className="grid"><StockCard symbol="ASELS" months={months} /><StockCard symbol="THYAO" months={months} /></div>
-    <footer><span>Alış fiyatı bu cihazda saklanır. Günlük değişimleri toplamana gerek yok.</span><span>Geçmiş performans · yatırım tavsiyesi değildir.</span></footer>
+  const [symbols, setSymbols] = useState<string[]>(DEFAULT_SYMBOLS);
+  const [stocks, setStocks] = useState<Record<string, StockState>>({});
+  const [newSymbol, setNewSymbol] = useState('');
+
+  useEffect(() => {
+    const saved = localStorage.getItem('swing-symbols');
+    if (saved) {
+      try { const arr = JSON.parse(saved); if (Array.isArray(arr) && arr.length) setSymbols(arr); } catch {}
+    }
+  }, []);
+
+  useEffect(() => { localStorage.setItem('swing-symbols', JSON.stringify(symbols)); }, [symbols]);
+
+  useEffect(() => {
+    symbols.forEach(symbol => loadStock(symbol));
+  }, [months, symbols.join('|')]);
+
+  async function loadStock(symbol: string) {
+    setStocks(prev => ({ ...prev, [symbol]: { ...(prev[symbol] || { symbol, entryInput: '' }), loading: true } }));
+    try {
+      const r = await fetch(`/api/backtest?symbol=${symbol}&months=${months}`, { cache: 'no-store' });
+      const data = await r.json();
+      const saved = localStorage.getItem(`position-entry-${symbol}`);
+      const entry = saved && Number(saved) > 0 ? Number(saved) : null;
+      setStocks(prev => ({ ...prev, [symbol]: { symbol, data, loading: false, entry, entryInput: entry ? String(entry) : prev[symbol]?.entryInput || '' } }));
+    } catch {
+      setStocks(prev => ({ ...prev, [symbol]: { symbol, data: { error: 'Veri alınamadı' } as Data, loading: false, entry: null, entryInput: '' } }));
+    }
+  }
+
+  function saveEntry(symbol: string, e: FormEvent) {
+    e.preventDefault();
+    const raw = stocks[symbol]?.entryInput || '';
+    const n = Number(raw.replace(',', '.'));
+    if (!Number.isFinite(n) || n <= 0) return;
+    localStorage.setItem(`position-entry-${symbol}`, String(n));
+    setStocks(prev => ({ ...prev, [symbol]: { ...prev[symbol], entry: n } }));
+  }
+
+  function clearEntry(symbol: string) {
+    localStorage.removeItem(`position-entry-${symbol}`);
+    setStocks(prev => ({ ...prev, [symbol]: { ...prev[symbol], entry: null, entryInput: '' } }));
+  }
+
+  function addSymbol(e: FormEvent) {
+    e.preventDefault();
+    const s = newSymbol.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!s || symbols.includes(s)) return;
+    setSymbols(prev => [...prev, s]); setNewSymbol('');
+  }
+
+  function removeSymbol(symbol: string) {
+    if (DEFAULT_SYMBOLS.includes(symbol)) return;
+    setSymbols(prev => prev.filter(s => s !== symbol));
+    localStorage.removeItem(`position-entry-${symbol}`);
+  }
+
+  const active = useMemo(() => symbols.filter(s => stocks[s]?.entry), [symbols, stocks]);
+  const waiting = useMemo(() => symbols.filter(s => !stocks[s]?.entry), [symbols, stocks]);
+
+  return <main>
+    <header className="hero">
+      <div>
+        <p className="eyebrow">BIST · SWING DESK</p>
+        <h1>Swing Board</h1>
+        <p className="sub">Pozisyonlar, alım bekleyenler ve dinamik backtest oranları tek ekranda.</p>
+      </div>
+      <div className="period"><span>BACKTEST</span><select value={months} onChange={e => setMonths(Number(e.target.value))}><option value={1}>1 ay · ~21 seans</option><option value={2}>2 ay · ~42 seans</option><option value={3}>3 ay · ~63 seans</option><option value={6}>6 ay · ~126 seans</option></select></div>
+    </header>
+
+    <section className="overview">
+      <div><span>Aktif pozisyon</span><strong>{active.length}</strong></div>
+      <div><span>Alım bekleyen</span><strong>{waiting.length}</strong></div>
+      <div><span>Takip edilen</span><strong>{symbols.length}</strong></div>
+      <div><span>Bildirim</span><strong className="statusOk">Telegram</strong></div>
+    </section>
+
+    <section className="sectionBlock">
+      <div className="sectionHead"><div><span className="sectionKicker">PORTFÖY</span><h2>Aktif pozisyonlar</h2></div><span className="muted">TP takibi</span></div>
+      {active.length ? <div className="list">{active.map(symbol => <StockRow key={symbol} state={stocks[symbol]} onReload={() => loadStock(symbol)} onSave={e => saveEntry(symbol, e)} onClear={() => clearEntry(symbol)} onInput={v => setStocks(p => ({ ...p, [symbol]: { ...p[symbol], entryInput: v } }))} />)}</div> : <div className="empty">Henüz aktif pozisyon yok.</div>}
+    </section>
+
+    <section className="sectionBlock">
+      <div className="sectionHead"><div><span className="sectionKicker">RADAR</span><h2>Alım bekleyenler</h2></div><form className="addTicker" onSubmit={addSymbol}><input value={newSymbol} onChange={e => setNewSymbol(e.target.value)} placeholder="Hisse kodu" /><button>Ekle</button></form></div>
+      <div className="list">{waiting.map(symbol => <StockRow key={symbol} state={stocks[symbol] || { symbol, loading: true, entryInput: '' }} onReload={() => loadStock(symbol)} onSave={e => saveEntry(symbol, e)} onClear={() => clearEntry(symbol)} onInput={v => setStocks(p => ({ ...p, [symbol]: { ...p[symbol], symbol, loading: p[symbol]?.loading ?? true, entryInput: v } }))} onRemove={!DEFAULT_SYMBOLS.includes(symbol) ? () => removeSymbol(symbol) : undefined} />)}</div>
+    </section>
+
+    <footer><span>ASELS ve THYAO çekirdek takip listesi.</span><span>Backtest geçmiş veriye dayanır · yatırım tavsiyesi değildir.</span></footer>
   </main>;
+}
+
+function StockRow({ state, onReload, onSave, onClear, onInput, onRemove }: { state: StockState; onReload: () => void; onSave: (e: FormEvent) => void; onClear: () => void; onInput: (v: string) => void; onRemove?: () => void }) {
+  const { symbol, data, loading, entry, entryInput } = state;
+  if (loading) return <article className="stockRow loadingRow"><div className="pulse" /></article>;
+  if (!data || data.error) return <article className="stockRow"><div className="rowMain"><strong>{symbol}</strong><span className="error">{data?.error || 'Veri alınamadı'}</span></div><button className="rowBtn" onClick={onReload}>Tekrar dene</button>{onRemove && <button className="iconBtn" onClick={onRemove}>×</button>}</article>;
+
+  const posReturn = entry ? (data.lastPrice / entry - 1) * 100 : 0;
+  const target = entry ? entry * (1 + data.best.tp / 100) : data.targetFromLast;
+  const remaining = entry ? Math.max(0, (target / data.lastPrice - 1) * 100) : null;
+  const reached = !!entry && data.lastPrice >= target;
+  const progress = entry ? Math.max(0, Math.min(100, (posReturn / data.best.tp) * 100)) : 0;
+
+  return <article className="stockRow">
+    <div className="rowMain">
+      <div className="tickerLine"><strong>{symbol}</strong><span className={`badge ${data.technical.label.includes('Al') ? 'buy' : data.technical.label.includes('Sat') ? 'sell' : ''}`}>{data.technical.label}</span></div>
+      <div className="lastPrice">₺{money(data.lastPrice)}</div>
+      <small>{data.lastDate} · RSI {data.technical.rsi14.toFixed(0)}</small>
+    </div>
+
+    <div className="rowMetric"><span>TP</span><strong>+%{data.best.tp.toFixed(2)}</strong></div>
+    <div className="rowMetric"><span>Yeniden al</span><strong>-%{data.best.reentry.toFixed(2)}</strong></div>
+
+    {entry ? <div className="positionStrip">
+      <div><span>Getiri</span><b className={posReturn >= 0 ? 'positive' : 'negative'}>{pct(posReturn)}</b></div>
+      <div><span>Hedef</span><b>₺{money(target)}</b></div>
+      <div><span>{reached ? 'Durum' : 'Kalan'}</span><b className={reached ? 'hit' : ''}>{reached ? 'HEDEF' : `%${remaining?.toFixed(2)}`}</b></div>
+      <div className="thinProgress"><i style={{ width: `${progress}%` }} /></div>
+      <button className="ghostBtn" onClick={onClear}>Pozisyonu kapat</button>
+    </div> : <form className="quickEntry" onSubmit={onSave}><input inputMode="decimal" value={entryInput} onChange={e => onInput(e.target.value)} placeholder="Alış fiyatı" /><button>Posizyon aç</button></form>}
+
+    <button className="iconBtn refreshIcon" onClick={onReload}>↻</button>
+    {onRemove && <button className="iconBtn removeIcon" onClick={onRemove}>×</button>}
+  </article>;
 }

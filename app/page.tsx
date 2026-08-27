@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import type { User } from '@supabase/supabase-js';
-import { supabase } from '@/lib/supabase';
+import { supabase } from '../lib/supabase';
 
 type Data={symbol:string;months:number;tradingDays:number;bars:number;lastPrice:number;lastDate:string;best:{tp:number;reentry:number;cycles:number;returnPct:number;avgDays:number};technical:{label:string;score:number;rsi14:number;macd:number;macdSignal:number;sma20:number;sma50:number;ema20:number};targetFromLast:number;reentryAfterTarget:number;error?:string};
 type Position={symbol:string;entry_price:number|null;status:'watch'|'active';target_pct:number};

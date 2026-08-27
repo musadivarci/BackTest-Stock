@@ -1,0 +1,19 @@
+name: Swing TP Alerts
+
+on:
+  schedule:
+    - cron: '20 7 * * 1-5'   # 10:20 Türkiye
+    - cron: '20 9 * * 1-5'   # 12:20 Türkiye
+    - cron: '20 11 * * 1-5'  # 14:20 Türkiye
+    - cron: '20 13 * * 1-5'  # 16:20 Türkiye
+    - cron: '30 14 * * 1-5'  # 17:30 Türkiye
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check active swing targets
+        run: |
+          curl --fail --silent --show-error --retry 2 \
+            'https://backtest-stock-lime.vercel.app/api/alerts/check'
